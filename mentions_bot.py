@@ -52,9 +52,11 @@ class Config:
     MIN_BASELINE_SAMPLES:   int   = int(os.getenv("MIN_BASELINE_SAMPLES", "6"))
 
     MIN_EDGE:               float = float(os.getenv("MIN_EDGE", "0.05"))         # 5¢ minimum edge
+    MAKER_FEE:              float = float(os.getenv("MAKER_FEE", "0.0175"))
     MIN_PRICE:              int   = int(os.getenv("MIN_PRICE", "15"))            # don't buy >85¢ YES
     MAX_PRICE:              int   = int(os.getenv("MAX_PRICE", "85"))
     BET_SIZE_USD:           float = float(os.getenv("BET_SIZE_USD", "10.0"))
+    KELLY_FRACTION:         float = float(os.getenv("KELLY_FRACTION", "1.0"))
     MAX_OPEN_POSITIONS:     int   = int(os.getenv("MAX_OPEN_POSITIONS", "5"))
     POLL_INTERVAL_SEC:      int   = int(os.getenv("POLL_INTERVAL_SEC", "900"))   # 15 min
 
@@ -504,7 +506,17 @@ def pick_market_and_side(signal: BuzzSignal, markets: list[KalshiMarket],
     for market in sorted(candidates, key=lambda m: m.yes_price if side == "YES" else m.no_price):
         price = market.yes_price if side == "YES" else market.no_price
         if Config.MIN_PRICE <= price <= Config.MAX_PRICE:
-            contracts = max(1, int(Config.BET_SIZE_USD * 100 / price))
+            # Fee-aware check: implied edge must exceed maker fee
+            implied_edge = signal.buzz_ratio * 0.05 - (price / 100)  # rough edge estimate
+            ev_after_fees = implied_edge - Config.MAKER_FEE if implied_edge > 0 else -Config.MAKER_FEE
+            if ev_after_fees <= 0 and signal.buzz_ratio < 3.0:
+                log.info(f"Skipping {market.ticker}: negative EV after {Config.MAKER_FEE*100}% fee")
+                continue
+            # Kelly: use confidence as model_prob proxy
+            market_prob = price / 100
+            kelly_f = max(0, (signal.confidence - market_prob) / (1 - market_prob)) if market_prob < 1 else 0
+            kelly_bet = max(1, min(Config.PAPER_BALANCE * kelly_f * Config.KELLY_FRACTION, Config.BET_SIZE_USD * 5))
+            contracts = max(1, int(kelly_bet * 100 / price))
             return market, side, price
 
     return None
@@ -593,9 +605,13 @@ def main():
                         log.info(f"[SKIP] Already holding {market.ticker}")
                         continue
 
-                    contracts = max(1, int(Config.BET_SIZE_USD * 100 / price))
+                    # Kelly criterion sizing
+                    market_prob = price / 100
+                    kelly_f = max(0, (confidence - market_prob) / (1 - market_prob)) if market_prob < 1 else 0
+                    kelly_bet = max(1, min(ledger.balance * kelly_f * Config.KELLY_FRACTION, Config.BET_SIZE_USD * 5))
+                    contracts = max(1, int(kelly_bet * 100 / price))
                     log.info(f"[SIGNAL] {entity} → {side} {market.ticker} "
-                             f"'{market.title[:60]}' @ {price}¢ × {contracts}")
+                             f"'{market.title[:60]}' @ {price}¢ × {contracts} kelly_f={kelly_f:.3f}")
 
                     # Risk guard check
                     if not Config.PAPER_MODE:
