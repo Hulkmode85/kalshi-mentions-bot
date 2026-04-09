@@ -30,6 +30,7 @@ from anthropic import Anthropic
 from dotenv import load_dotenv
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
+from risk_guard import RiskManager
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -546,6 +547,7 @@ def main():
     analyzer = SentimentAnalyzer()
     kalshi = KalshiClient()
     ledger = PaperLedger()
+    risk_manager = RiskManager(starting_balance=Config.PAPER_BALANCE)
     _bot_stats['balance'] = ledger.balance
     threading.Thread(target=_run_stats_server, daemon=True).start()
 
@@ -594,6 +596,22 @@ def main():
                     contracts = max(1, int(Config.BET_SIZE_USD * 100 / price))
                     log.info(f"[SIGNAL] {entity} → {side} {market.ticker} "
                              f"'{market.title[:60]}' @ {price}¢ × {contracts}")
+
+                    # Risk guard check
+                    if not Config.PAPER_MODE:
+                        allowed, rg_reason, capped = risk_manager.pre_trade_check(
+                            entity, price, contracts, side.lower(),
+                            bot_name="mentions-bot")
+                        if not allowed:
+                            log.warning(f"Risk guard blocked: {rg_reason}")
+                            continue
+                        contracts = capped or contracts
+                    else:
+                        allowed, rg_reason, capped = risk_manager.pre_trade_check(
+                            entity, price, contracts, side.lower(),
+                            bot_name="mentions-bot")
+                        if not allowed:
+                            log.info(f"[PAPER] Risk guard would block: {rg_reason}")
 
                     if Config.PAPER_MODE:
                         ledger.open_position(market.ticker, side, price, contracts, entity, signal)
