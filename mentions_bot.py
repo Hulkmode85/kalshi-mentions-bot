@@ -34,6 +34,17 @@ from risk_guard import RiskManager
 
 load_dotenv()
 
+# ── Shadow Logging ────────────────────────────────────────────────────────────
+SHADOW_LOG_FILE = os.getenv("SHADOW_LOG_FILE", "shadow_log.jsonl")
+
+def shadow_log(opportunity: dict, taken: bool, reason: str = ""):
+    entry = {"ts": time.time(), "taken": taken, "reason": reason, **opportunity}
+    try:
+        with open(SHADOW_LOG_FILE, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+    except:
+        pass
+
 # ── Multi-strike: scan ALL strikes per event/series, not just one ────────────
 MULTI_STRIKE = os.getenv("MULTI_STRIKE", "true").lower() == "true"
 # When fetching markets, iterate through ALL contracts in each series/event
@@ -591,6 +602,7 @@ def main():
 
                 if confidence < 0.5 or sentiment == "neutral":
                     log.info(f"[SKIP] {entity}: low confidence or neutral sentiment")
+                    shadow_log({"bot": "mentions", "entity": entity, "sentiment": sentiment, "confidence": confidence}, taken=False, reason="low confidence or neutral")
                     continue
 
                 # Find matching Kalshi markets
@@ -635,6 +647,7 @@ def main():
                         if not allowed:
                             log.info(f"[PAPER] Risk guard would block: {rg_reason}")
 
+                    shadow_log({"bot": "mentions", "ticker": market.ticker, "entity": entity, "side": side, "price": price, "confidence": confidence, "buzz_ratio": signal.buzz_ratio}, taken=True)
                     if Config.PAPER_MODE:
                         ledger.open_position(market.ticker, side, price, contracts, entity, signal)
                     else:
