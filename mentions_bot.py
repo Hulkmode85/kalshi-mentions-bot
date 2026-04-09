@@ -46,6 +46,34 @@ def shadow_log(opportunity: dict, taken: bool, reason: str = ""):
         pass
 
 # ── Multi-strike: scan ALL strikes per event/series, not just one ────────────
+
+# ─── Regime Detection — pause trading during extreme volatility ────────────
+import statistics as _stats
+
+REGIME_WINDOW = int(os.getenv("REGIME_WINDOW", "20"))
+REGIME_THRESHOLD = float(os.getenv("REGIME_THRESHOLD", "3.0"))
+_regime_prices: list[float] = []
+
+def check_regime(price: float) -> str:
+    """Returns 'CALM', 'ELEVATED', or 'CRASH'. Skip trades during CRASH."""
+    _regime_prices.append(price)
+    if len(_regime_prices) > REGIME_WINDOW:
+        _regime_prices.pop(0)
+    if len(_regime_prices) < 5:
+        return "CALM"
+    rets = [(b - a) / a for a, b in zip(_regime_prices[:-1], _regime_prices[1:])]
+    if not rets:
+        return "CALM"
+    mu = _stats.mean(rets)
+    sd = _stats.stdev(rets) if len(rets) > 1 else 0.01
+    z = abs(rets[-1] - mu) / max(sd, 0.0001)
+    if z > REGIME_THRESHOLD:
+        return "CRASH"
+    elif z > REGIME_THRESHOLD * 0.6:
+        return "ELEVATED"
+    return "CALM"
+
+
 MULTI_STRIKE = os.getenv("MULTI_STRIKE", "true").lower() == "true"
 # When fetching markets, iterate through ALL contracts in each series/event
 # and evaluate each strike independently. No single-ticker filtering.
@@ -647,6 +675,12 @@ def main():
                         if not allowed:
                             log.info(f"[PAPER] Risk guard would block: {rg_reason}")
 
+                    # ── Regime detection ──
+                    regime = check_regime(float(price))
+                    if regime == "CRASH":
+                        log.warning("REGIME CRASH on kalshi_mentions_bot — skipping trade")
+                        shadow_log({"bot": "kalshi_mentions_bot", "regime": regime}, taken=False, reason="crash regime")
+                        continue
                     shadow_log({"bot": "mentions", "ticker": market.ticker, "entity": entity, "side": side, "price": price, "confidence": confidence, "buzz_ratio": signal.buzz_ratio}, taken=True)
                     if Config.PAPER_MODE:
                         ledger.open_position(market.ticker, side, price, contracts, entity, signal)
