@@ -99,7 +99,7 @@ def check_circuit_breaker() -> bool:
     if _consecutive_losses >= CONSECUTIVE_LOSS_PAUSE:
         return True
     # Use PAPER_BALANCE if available, else 5000
-    _balance = globals().get("PAPER_BALANCE", 5000)
+    _balance = globals().get("PAPER_BALANCE", 2000)
     if _daily_pnl < -DAILY_DRAWDOWN_PAUSE_PCT * _balance:
         return True
     return False
@@ -123,7 +123,7 @@ log = logging.getLogger(__name__)
 
 class Config:
     PAPER_MODE:             bool  = os.getenv("PAPER_MODE", "true").lower() == "true"
-    PAPER_BALANCE:          float = float(os.getenv("PAPER_BALANCE", "5000"))
+    PAPER_BALANCE:          float = float(os.getenv("PAPER_BALANCE", "2000"))
     KALSHI_API_KEY:         str   = os.getenv("KALSHI_API_KEY", "")
     KALSHI_KEY_ID:          str   = os.getenv("KALSHI_KEY_ID", "")
     ANTHROPIC_API_KEY:      str   = os.getenv("ANTHROPIC_API_KEY", "")
@@ -139,7 +139,7 @@ class Config:
     MIN_PRICE:              int   = int(os.getenv("MIN_PRICE", "15"))            # don't buy >85¢ YES
     MAX_PRICE:              int   = int(os.getenv("MAX_PRICE", "85"))
     BET_SIZE_USD:           float = float(os.getenv("BET_SIZE_USD", "10.0"))
-    KELLY_FRACTION:         float = float(os.getenv("KELLY_FRACTION", "0.5"))
+    KELLY_FRACTION:         float = float(os.getenv("KELLY_FRACTION", "0.25"))
     MAX_OPEN_POSITIONS:     int   = int(os.getenv("MAX_OPEN_POSITIONS", "5"))
     POLL_INTERVAL_SEC:      int   = int(os.getenv("POLL_INTERVAL_SEC", "900"))   # 15 min
 
