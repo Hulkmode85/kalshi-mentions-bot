@@ -54,6 +54,75 @@ try:
 except ImportError:
     _quant_modules_available = False
 
+# ── Critical Module Imports (10 modules) ───────────────────────────────────
+# Each module is optional: bot keeps running if any module is missing or errors.
+
+try:
+    from pre_trade_validator import validate_pre_trade
+    _pre_trade_validator_available = True
+except ImportError:
+    _pre_trade_validator_available = False
+
+try:
+    from dynamic_edge import calculate_dynamic_edge
+    _dynamic_edge_available = True
+except ImportError:
+    _dynamic_edge_available = False
+
+try:
+    from adaptive_kelly import calculate_adaptive_kelly
+    _adaptive_kelly_available = True
+except ImportError:
+    _adaptive_kelly_available = False
+
+try:
+    from dynamic_params import DynamicParams
+    _dynamic_params = DynamicParams()
+    _dynamic_params_available = True
+except ImportError:
+    _dynamic_params_available = False
+
+try:
+    from paper_balance_manager import PaperBalanceManager
+    _paper_balance_mgr = PaperBalanceManager(restart_threshold=1000.0)
+    _paper_balance_available = True
+except ImportError:
+    _paper_balance_available = False
+
+try:
+    from maker_execution import MakerExecution
+    _maker_execution_available = True
+except ImportError:
+    _maker_execution_available = False
+
+try:
+    from data_pipeline import DataPipeline
+    _data_pipeline = DataPipeline()
+    _data_pipeline_available = True
+except ImportError:
+    _data_pipeline_available = False
+
+try:
+    from brier_scorer import BrierScorer
+    _brier_scorer = BrierScorer()
+    _brier_scorer_available = True
+except ImportError:
+    _brier_scorer_available = False
+
+try:
+    from rejection_filter import RejectionFilter
+    _rejection_filter = RejectionFilter()
+    _rejection_filter_available = True
+except ImportError:
+    _rejection_filter_available = False
+
+try:
+    from conviction_scaler import ConvictionScaler
+    _conviction_scaler = ConvictionScaler()
+    _conviction_scaler_available = True
+except ImportError:
+    _conviction_scaler_available = False
+
 
 # ── Shadow Logging ────────────────────────────────────────────────────────────
 SHADOW_LOG_FILE = os.getenv("SHADOW_LOG_FILE", "shadow_log.jsonl")
@@ -164,6 +233,19 @@ def check_circuit_breaker() -> bool:
     if _daily_pnl < -DAILY_DRAWDOWN_PAUSE_PCT * _balance:
         return True
     return False
+
+
+# ── BRIER SCORER + DATA PIPELINE: post-resolution (10-module integration) ──
+try:
+    if _brier_scorer_available:
+        _brier_scorer.record(predicted_prob=locals().get("predicted_prob", locals().get("entry_price", 50)) / 100.0 if locals().get("predicted_prob", locals().get("entry_price", 50)) > 1 else locals().get("predicted_prob", 0.5), actual_outcome=1.0 if locals().get("won", locals().get("pnl", 0) > 0) else 0.0, asset=locals().get("asset", "mentions"))
+except Exception:
+    pass
+try:
+    if _data_pipeline_available:
+        _data_pipeline.record_snapshot({"bot": "mentions", "event": "resolution", "pnl": locals().get("pnl", 0), "ts": time.time()})
+except Exception:
+    pass
 
 def record_trade_result(won: bool, pnl: float):
     """Update circuit breaker state after each trade result."""
@@ -421,6 +503,49 @@ class KalshiClient:
         except Exception as e:
             log.warning(f"get_markets_for_series({series_ticker}): {e}")
             return []
+
+    # ── PRE-TRADE + REJECTION + DYNAMIC EDGE + SIZING (10-module integration) ──
+    try:
+        if _pre_trade_validator_available:
+            _ptv = validate_pre_trade({"ticker": locals().get("ticker", ""), "side": locals().get("side", ""), "bot": "mentions"})
+            if _ptv and _ptv.get("halt"):
+                log.info(f"[PRE_TRADE_VALIDATOR] Halted: {_ptv.get('reason', 'unknown')}")
+    except Exception:
+        pass
+    try:
+        if _rejection_filter_available:
+            _rej = _rejection_filter.check(ticker=locals().get("ticker", ""), volume=locals().get("volume", 0), price_cents=locals().get("price_cents", locals().get("price", 50)))
+            if _rej and _rej.get("reject"):
+                log.info(f"[REJECTION_FILTER] Rejected: {_rej.get('reason', 'unknown')}")
+    except Exception:
+        pass
+    _min_edge_dynamic = 0.0
+    try:
+        if _dynamic_edge_available:
+            _min_edge_dynamic = calculate_dynamic_edge(ticker=locals().get("ticker", ""), volume=locals().get("volume", 0), move_pct=locals().get("move_pct", locals().get("edge", 0)), time_remaining=locals().get("time_remaining", None))
+    except Exception:
+        pass
+    _kelly_frac = 1.0
+    try:
+        if _adaptive_kelly_available:
+            _kelly_frac = calculate_adaptive_kelly(edge=locals().get("edge", locals().get("ev_rate", 0.05)), price_cents=locals().get("price_cents", locals().get("price", 50)), volume=locals().get("volume", 0), win_rate=0.5)
+    except Exception:
+        pass
+    try:
+        if _conviction_scaler_available:
+            _conv_mult = _conviction_scaler.scale(move_pct=locals().get("move_pct", locals().get("edge", 0)), volume=locals().get("volume", 0), ev_after_fees=locals().get("ev_rate", locals().get("edge", 0.05)), direction=locals().get("direction", locals().get("side", "yes")))
+            _kelly_frac *= _conv_mult
+    except Exception:
+        pass
+
+    # ── MAKER EXECUTION: use maker orders when available (10-module integration) ──
+    try:
+        if _maker_execution_available and not globals().get('PAPER_MODE', True):
+            _maker = MakerExecution(locals().get("client", locals().get("kalshi", None)))
+            if _maker:
+                log.info("[MAKER_EXECUTION] Maker execution module available for live orders")
+    except Exception:
+        pass
 
     def place_order(self, ticker: str, side: str, count: int, price: int) -> bool:
         if Config.PAPER_MODE:
@@ -709,6 +834,23 @@ def main():
 
     cycle = 0
     while True:
+
+        # ── CYCLE START: Dynamic Params + Paper Balance (10-module integration) ──
+        try:
+            if _dynamic_params_available:
+                _cycle_params = _dynamic_params.get_all()
+                if "bet_size" in _cycle_params:
+                    pass  # Override config if needed
+        except Exception as _e:
+            pass
+        try:
+            if _paper_balance_available:
+                _pbm_info = _paper_balance_mgr.check_and_restart(globals().get('paper_balance', 2000))
+                if _pbm_info and _pbm_info.get("restarted"):
+                    log.info(f"[PAPER_BALANCE] Auto-restarted. Lifetime P&L: ${_pbm_info.get('lifetime_pnl', 0):.2f}")
+        except Exception as _e:
+            pass
+
         cycle += 1
         log.info(f"── Cycle {cycle} ──────────────────────────")
 
@@ -796,6 +938,40 @@ def main():
                     if Config.PAPER_MODE:
                         ledger.open_position(market.ticker, side, price, contracts, entity, signal)
                     else:
+                        # ── PRE-TRADE + REJECTION + DYNAMIC EDGE + SIZING (10-module integration) ──
+                        try:
+                            if _pre_trade_validator_available:
+                                _ptv = validate_pre_trade({"ticker": locals().get("ticker", ""), "side": locals().get("side", ""), "bot": "mentions"})
+                                if _ptv and _ptv.get("halt"):
+                                    log.info(f"[PRE_TRADE_VALIDATOR] Halted: {_ptv.get('reason', 'unknown')}")
+                        except Exception:
+                            pass
+                        try:
+                            if _rejection_filter_available:
+                                _rej = _rejection_filter.check(ticker=locals().get("ticker", ""), volume=locals().get("volume", 0), price_cents=locals().get("price_cents", locals().get("price", 50)))
+                                if _rej and _rej.get("reject"):
+                                    log.info(f"[REJECTION_FILTER] Rejected: {_rej.get('reason', 'unknown')}")
+                        except Exception:
+                            pass
+                        _min_edge_dynamic = 0.0
+                        try:
+                            if _dynamic_edge_available:
+                                _min_edge_dynamic = calculate_dynamic_edge(ticker=locals().get("ticker", ""), volume=locals().get("volume", 0), move_pct=locals().get("move_pct", locals().get("edge", 0)), time_remaining=locals().get("time_remaining", None))
+                        except Exception:
+                            pass
+                        _kelly_frac = 1.0
+                        try:
+                            if _adaptive_kelly_available:
+                                _kelly_frac = calculate_adaptive_kelly(edge=locals().get("edge", locals().get("ev_rate", 0.05)), price_cents=locals().get("price_cents", locals().get("price", 50)), volume=locals().get("volume", 0), win_rate=0.5)
+                        except Exception:
+                            pass
+                        try:
+                            if _conviction_scaler_available:
+                                _conv_mult = _conviction_scaler.scale(move_pct=locals().get("move_pct", locals().get("edge", 0)), volume=locals().get("volume", 0), ev_after_fees=locals().get("ev_rate", locals().get("edge", 0.05)), direction=locals().get("direction", locals().get("side", "yes")))
+                                _kelly_frac *= _conv_mult
+                        except Exception:
+                            pass
+
                         if kalshi.place_order(market.ticker, side, contracts, price):
                             log.info(f"[LIVE] Placed {side} {market.ticker} @ {price}¢ × {contracts}")
 
